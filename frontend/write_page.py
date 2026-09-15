@@ -1,0 +1,1 @@
+﻿import sys; content = open(\"payload.txt\", encoding=\"utf-8\").read(); open(\"src/pages/PeerCommunityPage.tsx\", \"w\", encoding=\"utf-8\").write(content); print(\"Written\", len(content.splitlines()), \"lines\")

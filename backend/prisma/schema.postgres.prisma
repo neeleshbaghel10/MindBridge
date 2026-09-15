@@ -1,0 +1,534 @@
+// MINDBRIDGE - PostgreSQL Native Prisma Schema (SIH 25092)
+// For deployment on PostgreSQL / Supabase / Neon
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  STUDENT
+  COUNSELLOR
+  PEER_VOLUNTEER
+  INSTITUTION_ADMIN
+  SUPER_ADMIN
+}
+
+enum ConsentType {
+  TERMS_OF_SERVICE
+  PRIVACY_POLICY
+  EMERGENCY_DISCLOSURE
+  COUNSELLOR_DATA_SHARING
+  ANONYMOUS_RESEARCH
+}
+
+enum ConsentStatus {
+  GRANTED
+  REVOKED
+}
+
+enum RiskLevel {
+  NONE
+  LOW
+  MODERATE
+  HIGH
+  CRISIS
+}
+
+enum CrisisStatus {
+  TRIGGERED
+  ACKNOWLEDGED
+  COUNSELLOR_DISPATCHED
+  RESOLVED
+}
+
+enum AppointmentStatus {
+  REQUESTED
+  CONFIRMED
+  RESCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum MeetingType {
+  IN_PERSON
+  VIRTUAL
+}
+
+enum PostStatus {
+  PENDING_REVIEW
+  APPROVED
+  FLAGGED
+  REMOVED
+}
+
+enum ModerationAction {
+  APPROVE
+  REJECT
+  WARN_USER
+  ESCALATE_RISK
+}
+
+enum NotificationType {
+  APPOINTMENT
+  CHECKIN_REMINDER
+  RISK_ALERT
+  PEER_REPLY
+  SYSTEM
+}
+
+model Institution {
+  id               String   @id @default(uuid())
+  name             String
+  code             String   @unique
+  domain           String   @unique
+  address          String?
+  contactEmail     String
+  crisisHotline    String   @default("14416")
+  campusSecurityNo String?
+  settings         Json?    @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  users     User[]
+  resources Resource[]
+  metrics   WellbeingMetric[]
+}
+
+model User {
+  id            String    @id @default(uuid())
+  institutionId String
+  email         String    @unique
+  passwordHash  String
+  role          UserRole  @default(STUDENT)
+  firstName     String
+  lastName      String
+  isActive      Boolean   @default(true)
+  isVerified    Boolean   @default(false)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  institution       Institution        @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  studentProfile    StudentProfile?
+  counsellorProfile CounsellorProfile?
+  consents          Consent[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  moderationEvents  ModerationEvent[]
+
+  @@index([institutionId, role])
+}
+
+model StudentProfile {
+  id                      String   @id @default(uuid())
+  userId                  String   @unique
+  anonymousAlias          String   @unique
+  department              String
+  yearOfStudy             Int
+  onboardingCompleted     Boolean  @default(false)
+  preferredLanguage       String   @default("en")
+  emergencyContactName    String?
+  emergencyContactPhone   String?
+  emergencyContactConsent Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  checkins         WellbeingCheckin[]
+  assessments      AssessmentResponse[]
+  chatSessions     ChatSession[]
+  appointments     Appointment[]
+  peerPosts        PeerPost[]
+  peerComments     PeerComment[]
+  resourceProgress ResourceProgress[]
+  recommendations  Recommendation[]
+  riskEvents       RiskEvent[]
+  tasks            FollowUpTask[]
+
+  @@index([department, yearOfStudy])
+}
+
+model CounsellorProfile {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  licenseNumber   String
+  specialization  String[]
+  bio             String?
+  qualification   String
+  languagesSpoken String[]
+  isAvailable     Boolean  @default(true)
+  maxDailySlots   Int      @default(6)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user              User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  availabilities    CounsellorAvailability[]
+  appointments      Appointment[]
+  crisisEscalations CrisisEvent[]
+  tasks             FollowUpTask[]
+}
+
+model Consent {
+  id        String        @id @default(uuid())
+  userId    String
+  type      ConsentType
+  status    ConsentStatus @default(GRANTED)
+  version   String        @default("1.0")
+  ipAddress String?
+  userAgent String?
+  grantedAt DateTime      @default(now())
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type, version])
+  @@index([userId, status])
+}
+
+model WellbeingCheckin {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  date             DateTime @default(now())
+  moodScore        Int
+  sleepHours       Float
+  stressLevel      Int
+  energyLevel      Int
+  notes            String?
+  tags             String[]
+  createdAt        DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+
+  @@index([studentProfileId, date])
+}
+
+model WellbeingMetric {
+  id             String   @id @default(uuid())
+  institutionId  String
+  department     String
+  periodDate     DateTime
+  avgMoodScore   Float
+  avgStressLevel Float
+  avgSleepHours  Float
+  cohortSize     Int
+  createdAt      DateTime @default(now())
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+
+  @@unique([institutionId, department, periodDate])
+  @@index([institutionId, periodDate])
+}
+
+model Assessment {
+  id                 String   @id @default(uuid())
+  code               String   @unique
+  title              String
+  description        String
+  clinicalDisclaimer String
+  questionsJson      Json
+  scoringRulesJson   Json
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  responses AssessmentResponse[]
+}
+
+model AssessmentResponse {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  assessmentId     String
+  score            Int
+  severityCategory String
+  answersJson      Json
+  completedAt      DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  assessment     Assessment     @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@index([studentProfileId, completedAt])
+  @@index([assessmentId, severityCategory])
+}
+
+model ChatSession {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  title            String   @default("Support Conversation")
+  status           String   @default("ACTIVE")
+  startedAt        DateTime @default(now())
+  lastActivityAt   DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  messages       ChatMessage[]
+  riskEvents     RiskEvent[]
+
+  @@index([studentProfileId, lastActivityAt])
+}
+
+model ChatMessage {
+  id           String   @id @default(uuid())
+  sessionId    String
+  sender       String
+  content      String
+  riskDetected Boolean  @default(false)
+  flagsJson    Json?    @default("{}")
+  createdAt    DateTime @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+model RiskEvent {
+  id                     String    @id @default(uuid())
+  studentProfileId       String
+  sessionId              String?
+  riskCategory           String
+  riskScore              Float
+  riskLevel              String    @default("LEVEL_0")
+  triggerType            String?
+  source                 String    @default("AI_CHAT")
+  actionTaken            String    @default("NONE")
+  escalationStatus       String    @default("NOT_ESCALATED")
+  followUpStatus         String    @default("NO_FOLLOWUP_REQUIRED")
+  auditInfoJson          String?
+  triggerSnippetRedacted String
+  handled                Boolean   @default(false)
+  handledAt              DateTime?
+  createdAt              DateTime  @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  chatSession    ChatSession?   @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  crisisEvent    CrisisEvent?
+
+  @@index([studentProfileId, riskLevel])
+  @@index([escalationStatus, createdAt])
+}
+
+model CrisisEvent {
+  id                      String       @id @default(uuid())
+  riskEventId             String       @unique
+  status                  CrisisStatus @default(TRIGGERED)
+  helplineProvided        Boolean      @default(true)
+  escalatedToCounsellorId String?
+  followUpScheduledFor    DateTime?
+  resolutionNotes         String?
+  notes                   String?
+  createdAt               DateTime     @default(now())
+  resolvedAt              DateTime?
+
+  riskEvent             RiskEvent          @relation(fields: [riskEventId], references: [id], onDelete: Cascade)
+  escalatedToCounsellor CounsellorProfile? @relation(fields: [escalatedToCounsellorId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+}
+
+model CounsellorAvailability {
+  id              String    @id @default(uuid())
+  counsellorId    String
+  dayOfWeek       Int
+  startTime       String
+  endTime         String
+  slotDurationMin Int       @default(45)
+  timezone        String    @default("Asia/Kolkata")
+  isRecurring     Boolean   @default(true)
+  overrideDate    DateTime?
+  isBlocked       Boolean   @default(false)
+
+  counsellor   CounsellorProfile @relation(fields: [counsellorId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+}
+
+model Appointment {
+  id                     String            @id @default(uuid())
+  studentProfileId       String
+  counsellorId           String
+  availabilitySlotId     String?
+  scheduledAt            DateTime
+  durationMin            Int               @default(45)
+  status                 AppointmentStatus @default(REQUESTED)
+  timezone               String            @default("Asia/Kolkata")
+  meetingType            MeetingType       @default(VIRTUAL)
+  meetingLinkOrLocation  String?
+  studentNotes           String?
+  privateCounsellorNotes String?
+  previousScheduledAt    DateTime?
+  rescheduleReason       String?
+  cancelledAt            DateTime?
+  cancelledByRole        String?
+  cancellationReason     String?
+  reminderSentAt         DateTime?
+  followUpNotes          String?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  studentProfile   StudentProfile          @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  counsellor       CounsellorProfile       @relation(fields: [counsellorId], references: [id], onDelete: Cascade)
+  availabilitySlot CounsellorAvailability? @relation(fields: [availabilitySlotId], references: [id], onDelete: SetNull)
+  tasks            FollowUpTask[]
+
+  @@index([studentProfileId, scheduledAt])
+  @@index([counsellorId, scheduledAt])
+  @@index([status, scheduledAt])
+}
+
+model FollowUpTask {
+  id                  String    @id @default(uuid())
+  counsellorProfileId String
+  studentProfileId    String?
+  appointmentId       String?
+  title               String
+  description         String?
+  priority            String    @default("MEDIUM")
+  status              String    @default("PENDING")
+  dueDate             DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  counsellor     CounsellorProfile @relation(fields: [counsellorProfileId], references: [id], onDelete: Cascade)
+  studentProfile StudentProfile?   @relation(fields: [studentProfileId], references: [id], onDelete: SetNull)
+  appointment    Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  @@index([counsellorProfileId, status])
+  @@index([studentProfileId])
+}
+
+model PeerPost {
+  id                  String     @id @default(uuid())
+  studentProfileId    String
+  anonymousAuthorName String
+  title               String
+  content             String
+  category            String
+  status              PostStatus @default(PENDING_REVIEW)
+  upvotesCount        Int        @default(0)
+  flagCount           Int        @default(0)
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  comments       PeerComment[]
+
+  @@index([status, createdAt])
+  @@index([category])
+}
+
+model PeerComment {
+  id                  String     @id @default(uuid())
+  postId              String
+  studentProfileId    String
+  anonymousAuthorName String
+  content             String
+  status              PostStatus @default(APPROVED)
+  flagCount           Int        @default(0)
+  createdAt           DateTime   @default(now())
+
+  post           PeerPost       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+
+  @@index([postId, status])
+}
+
+model ModerationEvent {
+  id              String           @id @default(uuid())
+  moderatorUserId String
+  entityType      String
+  entityId        String
+  action          ModerationAction
+  reason          String
+  createdAt       DateTime         @default(now())
+
+  moderator User @relation(fields: [moderatorUserId], references: [id], onDelete: Cascade)
+
+  @@index([entityType, entityId])
+}
+
+model Resource {
+  id              String   @id @default(uuid())
+  institutionId   String?
+  title           String
+  slug            String   @unique
+  category        String
+  contentMarkdown String
+  mediaUrl        String?
+  readingTimeMin  Int      @default(5)
+  tags            String[]
+  isPublished     Boolean  @default(true)
+  language        String   @default("en")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  institution     Institution?       @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  progress        ResourceProgress[]
+  recommendations Recommendation[]
+
+  @@index([category, isPublished])
+}
+
+model ResourceProgress {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  resourceId       String
+  isCompleted      Boolean  @default(false)
+  bookmarked       Boolean  @default(false)
+  timeSpentSec     Int      @default(0)
+  lastAccessedAt   DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  resource       Resource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([studentProfileId, resourceId])
+}
+
+model Recommendation {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  resourceId       String
+  rationale        String
+  score            Float    @default(1.0)
+  dismissed        Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  resource       Resource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([studentProfileId, resourceId])
+  @@index([studentProfileId, dismissed])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  type      NotificationType @default(SYSTEM)
+  isRead    Boolean          @default(false)
+  link      String?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  userId       String?
+  action       String
+  entityType   String
+  entityId     String?
+  ipAddress    String?
+  userAgent    String?
+  metadataJson Json?    @default("{}")
+  timestamp    DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, timestamp])
+  @@index([action, timestamp])
+}

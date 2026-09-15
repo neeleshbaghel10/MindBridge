@@ -1,0 +1,555 @@
+// MINDBRIDGE - Prisma Database Schema (SIH 25092)
+// Designed for PostgreSQL production and SQLite local prototype execution
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// -------------------------------------------------------------
+// 1. INSTITUTION & USERS
+// -------------------------------------------------------------
+
+model Institution {
+  id               String   @id @default(uuid())
+  name             String
+  code             String   @unique
+  domain           String   @unique
+  address          String?
+  contactEmail     String
+  crisisHotline    String   @default("14416") // Tele-MANAS default
+  campusSecurityNo String?  @default("112")
+  settings         String?  @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  users     User[]
+  resources Resource[]
+  metrics   WellbeingMetric[]
+}
+
+model User {
+  id            String    @id @default(uuid())
+  institutionId String
+  email         String    @unique
+  passwordHash  String
+  role          String    @default("STUDENT") // STUDENT, COUNSELLOR, PEER_VOLUNTEER, INSTITUTION_ADMIN, SUPER_ADMIN
+  firstName     String
+  lastName      String
+  isActive      Boolean   @default(true)
+  isVerified    Boolean   @default(false)
+  deletedAt     DateTime? // Soft deletion for DPDP / GDPR right to erasure
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  institution       Institution        @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  studentProfile    StudentProfile?
+  counsellorProfile CounsellorProfile?
+  consents          Consent[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  moderationEvents  ModerationEvent[]
+
+  @@index([institutionId, role])
+}
+
+model StudentProfile {
+  id                      String    @id @default(uuid())
+  userId                  String    @unique
+  anonymousAlias          String    @unique
+  department              String
+  yearOfStudy             Int
+  onboardingCompleted     Boolean   @default(false)
+  preferredLanguage       String    @default("en")
+  emergencyContactName    String?
+  emergencyContactPhone   String?
+  emergencyContactConsent Boolean   @default(false)
+  deletedAt               DateTime? // Soft deletion support
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  checkins         WellbeingCheckin[]
+  assessments      AssessmentResponse[]
+  chatSessions     ChatSession[]
+  appointments     Appointment[]
+  peerPosts        PeerPost[]
+  peerComments     PeerComment[]
+  peerReactions    PeerReaction[]
+  peerReports      PeerReport[]
+  resourceProgress ResourceProgress[]
+  recommendations  Recommendation[]
+  riskEvents       RiskEvent[]
+  tasks            FollowUpTask[]
+
+  @@index([department, yearOfStudy])
+}
+
+model CounsellorProfile {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  licenseNumber   String
+  specialization  String    @default("[]") // JSON stringified array of focus areas
+  bio             String?
+  qualification   String
+  languagesSpoken String    @default("[]") // JSON stringified array
+  isAvailable     Boolean   @default(true)
+  maxDailySlots   Int       @default(6)
+  deletedAt       DateTime? // Soft deletion
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user              User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  availabilities    CounsellorAvailability[]
+  appointments      Appointment[]
+  crisisEscalations CrisisEvent[]
+  tasks             FollowUpTask[]
+}
+
+model Consent {
+  id        String    @id @default(uuid())
+  userId    String
+  type      String // TERMS_OF_SERVICE, PRIVACY_POLICY, EMERGENCY_DISCLOSURE, COUNSELLOR_DATA_SHARING, ANONYMOUS_RESEARCH
+  status    String    @default("GRANTED") // GRANTED, REVOKED
+  version   String    @default("1.0")
+  ipAddress String?
+  userAgent String?
+  grantedAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type, version])
+  @@index([userId, status])
+}
+
+// -------------------------------------------------------------
+// 2. WELLBEING CHECK-IN, TIMELINE & METRICS
+// -------------------------------------------------------------
+
+model WellbeingCheckin {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  date             DateTime @default(now())
+  moodScore        Int // 1 to 5
+  sleepHours       Float
+  stressLevel      Int // 1 to 5
+  energyLevel      Int // 1 to 5
+  notes            String?
+  tags             String   @default("[]") // JSON stringified tags
+  createdAt        DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+
+  @@index([studentProfileId, date])
+}
+
+model WellbeingMetric {
+  id             String   @id @default(uuid())
+  institutionId  String
+  department     String
+  periodDate     DateTime
+  avgMoodScore   Float
+  avgStressLevel Float
+  avgSleepHours  Float
+  cohortSize     Int
+  createdAt      DateTime @default(now())
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+
+  @@unique([institutionId, department, periodDate])
+  @@index([institutionId, periodDate])
+}
+
+// -------------------------------------------------------------
+// 3. CLINICAL SCREENING ENGINE
+// -------------------------------------------------------------
+
+model Assessment {
+  id                 String   @id @default(uuid())
+  code               String   @unique // PHQ9, GAD7, WHO5, GHQ12
+  title              String
+  description        String
+  clinicalDisclaimer String
+  questionsJson      String // JSON stringified question objects
+  scoringRulesJson   String // JSON stringified scoring thresholds
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  responses AssessmentResponse[]
+}
+
+model AssessmentResponse {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  assessmentId     String
+  score            Int
+  severityCategory String // Minimal, Mild, Moderate, Moderately Severe, Severe
+  answersJson      String // JSON stringified answer values
+  completedAt      DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  assessment     Assessment     @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@index([studentProfileId, completedAt])
+  @@index([assessmentId, severityCategory])
+}
+
+// -------------------------------------------------------------
+// 4. AI CONVERSATIONAL FIRST-AID & CRISIS SAFETY
+// -------------------------------------------------------------
+
+model ChatSession {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  title            String   @default("Support Conversation")
+  status           String   @default("ACTIVE") // ACTIVE, ARCHIVED, ESCALATED
+  startedAt        DateTime @default(now())
+  lastActivityAt   DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  messages       ChatMessage[]
+  riskEvents     RiskEvent[]
+
+  @@index([studentProfileId, lastActivityAt])
+}
+
+model ChatMessage {
+  id           String   @id @default(uuid())
+  sessionId    String
+  sender       String // USER, AI_ASSISTANT, CRISIS_SYSTEM
+  content      String
+  riskDetected Boolean  @default(false)
+  flagsJson    String?  @default("{}")
+  createdAt    DateTime @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+model RiskEvent {
+  id                     String    @id @default(uuid())
+  studentProfileId       String
+  sessionId              String?
+  riskCategory           String // SELF_HARM, SUICIDAL_IDEATION, PANIC, VIOLENCE
+  riskScore              Float // 0.0 to 1.0
+  riskLevel              String    @default("LEVEL_0") // LEVEL_0, LEVEL_1, LEVEL_2, LEVEL_3, LEVEL_4
+  triggerType            String? // EXPLICIT_SUICIDAL_IDEATION, INDIRECT_CRISIS, SELF_HARM, IMMINENT_DANGER, DISTRESS_ANXIETY, etc.
+  source                 String    @default("AI_CHAT") // AI_CHAT, PEER_COMMUNITY, ASSESSMENT, DIRECT_SOS
+  actionTaken            String    @default("NONE") // NONE, COPING_STRATEGIES_OFFERED, COUNSELLOR_RECOMMENDED, CRISIS_HELPLINES_SHOWN, EMERGENCY_ESCALATED
+  escalationStatus       String    @default("NOT_ESCALATED") // NOT_ESCALATED, ESCALATED, ACKNOWLEDGED, COUNSELLOR_DISPATCHED, RESOLVED
+  followUpStatus         String    @default("NO_FOLLOWUP_REQUIRED") // NO_FOLLOWUP_REQUIRED, PENDING_FOLLOWUP, IN_PROGRESS, COMPLETED
+  auditInfoJson          String? // Sanitized audit information (IP, session, minimal context)
+  triggerSnippetRedacted String
+  handled                Boolean   @default(false)
+  handledAt              DateTime?
+  createdAt              DateTime  @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  chatSession    ChatSession?   @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  crisisEvent    CrisisEvent?
+
+  @@index([studentProfileId, riskLevel])
+  @@index([escalationStatus, createdAt])
+}
+
+model CrisisEvent {
+  id                      String    @id @default(uuid())
+  riskEventId             String    @unique
+  status                  String    @default("TRIGGERED") // TRIGGERED, ACKNOWLEDGED, COUNSELLOR_DISPATCHED, FOLLOWUP_SCHEDULED, RESOLVED, CLOSED
+  helplineProvided        Boolean   @default(true)
+  escalatedToCounsellorId String?
+  followUpScheduledFor    DateTime?
+  resolutionNotes         String?
+  notes                   String?
+  createdAt               DateTime  @default(now())
+  resolvedAt              DateTime?
+
+  riskEvent             RiskEvent          @relation(fields: [riskEventId], references: [id], onDelete: Cascade)
+  escalatedToCounsellor CounsellorProfile? @relation(fields: [escalatedToCounsellorId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+}
+
+// -------------------------------------------------------------
+// 5. COUNSELLING DIRECTORY & APPOINTMENTS
+// -------------------------------------------------------------
+
+model CounsellorAvailability {
+  id              String    @id @default(uuid())
+  counsellorId    String
+  dayOfWeek       Int // 0 (Sun) to 6 (Sat)
+  startTime       String // "09:00"
+  endTime         String // "17:00"
+  slotDurationMin Int       @default(45)
+  timezone        String    @default("Asia/Kolkata")
+  isRecurring     Boolean   @default(true)
+  overrideDate    DateTime?
+  isBlocked       Boolean   @default(false)
+
+  counsellor   CounsellorProfile @relation(fields: [counsellorId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+}
+
+model Appointment {
+  id                     String   @id @default(uuid())
+  studentProfileId       String
+  counsellorId           String
+  availabilitySlotId     String?
+  scheduledAt            DateTime
+  durationMin            Int      @default(45)
+  status                 String   @default("REQUESTED") // REQUESTED, CONFIRMED, RESCHEDULED, COMPLETED, CANCELLED, NO_SHOW
+  timezone               String   @default("Asia/Kolkata")
+  meetingType            String   @default("VIRTUAL") // IN_PERSON, VIRTUAL
+  meetingLinkOrLocation  String?
+  studentNotes           String?
+  privateCounsellorNotes String? // Confidential notes
+  previousScheduledAt    DateTime?
+  rescheduleReason       String?
+  cancelledAt            DateTime?
+  cancelledByRole        String?
+  cancellationReason     String?
+  reminderSentAt         DateTime?
+  followUpNotes          String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  studentProfile   StudentProfile          @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  counsellor       CounsellorProfile       @relation(fields: [counsellorId], references: [id], onDelete: Cascade)
+  availabilitySlot CounsellorAvailability? @relation(fields: [availabilitySlotId], references: [id], onDelete: SetNull)
+  tasks            FollowUpTask[]
+
+  @@index([studentProfileId, scheduledAt])
+  @@index([counsellorId, scheduledAt])
+  @@index([status, scheduledAt])
+}
+
+model FollowUpTask {
+  id                  String    @id @default(uuid())
+  counsellorProfileId String
+  studentProfileId    String?
+  appointmentId       String?
+  title               String
+  description         String?
+  priority            String    @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
+  status              String    @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED, CANCELLED
+  dueDate             DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  counsellor     CounsellorProfile @relation(fields: [counsellorProfileId], references: [id], onDelete: Cascade)
+  studentProfile StudentProfile?   @relation(fields: [studentProfileId], references: [id], onDelete: SetNull)
+  appointment    Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  @@index([counsellorProfileId, status])
+  @@index([studentProfileId])
+}
+
+// -------------------------------------------------------------
+// 6. PEER SUPPORT COMMUNITY & MODERATION
+// -------------------------------------------------------------
+
+model PeerPost {
+  id                  String    @id @default(uuid())
+  studentProfileId    String
+  anonymousAuthorName String
+  title               String
+  content             String
+  category            String    // Academic, Relationships, Mindset, General
+  isAnonymous         Boolean   @default(true)
+  status              String    @default("PENDING") // PENDING, APPROVED, FLAGGED, REMOVED, ESCALATED
+  aiModerationScore   Float?    // 0.0 – 1.0 risk score from AI screening
+  aiModerationLabels  String    @default("[]") // JSON: ["SPAM","CRISIS","ABUSE"] etc.
+  moderationReason    String?
+  moderatedByUserId   String?
+  moderatedAt         DateTime?
+  deletedAt           DateTime? // Soft deletion
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  comments       PeerComment[]
+  reactions      PeerReaction[]
+  reports        PeerReport[]
+
+  @@index([status, createdAt])
+  @@index([category])
+}
+
+model PeerComment {
+  id                  String    @id @default(uuid())
+  postId              String
+  studentProfileId    String
+  anonymousAuthorName String
+  content             String
+  isAnonymous         Boolean   @default(true)
+  status              String    @default("PENDING") // PENDING, APPROVED, FLAGGED, REMOVED, ESCALATED
+  aiModerationScore   Float?
+  aiModerationLabels  String    @default("[]")
+  moderationReason    String?
+  moderatedByUserId   String?
+  moderatedAt         DateTime?
+  deletedAt           DateTime? // Soft deletion
+  createdAt           DateTime  @default(now())
+
+  post           PeerPost       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  reactions      PeerReaction[]
+  reports        PeerReport[]
+
+  @@index([postId, status])
+}
+
+model PeerReaction {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  postId           String?
+  commentId        String?
+  reactionType     String   // UPVOTE, EMPATHY, SUPPORT, HELPFUL
+  createdAt        DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  post           PeerPost?      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  comment        PeerComment?   @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentProfileId, postId, reactionType])
+  @@unique([studentProfileId, commentId, reactionType])
+  @@index([postId])
+  @@index([commentId])
+}
+
+model PeerReport {
+  id               String    @id @default(uuid())
+  reporterProfileId String
+  postId           String?
+  commentId        String?
+  reason           String    // HARASSMENT, SELF_HARM, SPAM, INAPPROPRIATE, OTHER
+  details          String?
+  status           String    @default("PENDING") // PENDING, REVIEWED, ACTIONED, DISMISSED
+  reviewedAt       DateTime?
+  reviewedByUserId String?
+  createdAt        DateTime  @default(now())
+
+  reporterProfile StudentProfile @relation(fields: [reporterProfileId], references: [id], onDelete: Cascade)
+  post            PeerPost?      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  comment         PeerComment?   @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([postId])
+  @@index([commentId])
+}
+
+model ModerationEvent {
+  id              String   @id @default(uuid())
+  moderatorUserId String
+  entityType      String   // PEER_POST, PEER_COMMENT
+  entityId        String
+  action          String   // APPROVE, REMOVE, ESCALATE_TO_COUNSELLOR, DISMISS_REPORT
+  reason          String
+  aiLabels        String   @default("[]") // AI moderation labels at time of action
+  createdAt       DateTime @default(now())
+
+  moderator User @relation(fields: [moderatorUserId], references: [id], onDelete: Cascade)
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// -------------------------------------------------------------
+// 7. PSYCHOEDUCATIONAL RESOURCES & RECOMMENDATIONS
+// -------------------------------------------------------------
+
+model Resource {
+  id              String   @id @default(uuid())
+  institutionId   String?
+  title           String
+  slug            String   @unique
+  category        String // ANXIETY, STRESS, SLEEP, EXAM_PREPARATION, MINDFULNESS
+  contentMarkdown String
+  mediaUrl        String?
+  readingTimeMin  Int      @default(5)
+  tags            String   @default("[]") // JSON stringified tags
+  isPublished     Boolean  @default(true)
+  language        String   @default("en")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  institution     Institution?       @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  progress        ResourceProgress[]
+  recommendations Recommendation[]
+
+  @@index([category, isPublished])
+}
+
+model ResourceProgress {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  resourceId       String
+  isCompleted      Boolean  @default(false)
+  bookmarked       Boolean  @default(false)
+  timeSpentSec     Int      @default(0)
+  lastAccessedAt   DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  resource       Resource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([studentProfileId, resourceId])
+}
+
+model Recommendation {
+  id               String   @id @default(uuid())
+  studentProfileId String
+  resourceId       String
+  rationale        String
+  score            Float    @default(1.0)
+  dismissed        Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  resource       Resource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([studentProfileId, resourceId])
+  @@index([studentProfileId, dismissed])
+}
+
+// -------------------------------------------------------------
+// 8. NOTIFICATIONS & IMMUTABLE AUDIT LOG
+// -------------------------------------------------------------
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  type      String   @default("SYSTEM") // APPOINTMENT, CHECKIN_REMINDER, RISK_ALERT, PEER_REPLY, SYSTEM
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  userId       String?
+  action       String // VIEW_STUDENT_SUMMARY, BOOK_APPOINTMENT, CHANGE_CONSENT, etc.
+  entityType   String
+  entityId     String?
+  ipAddress    String?
+  userAgent    String?
+  metadataJson String?  @default("{}")
+  timestamp    DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, timestamp])
+  @@index([action, timestamp])
+}
